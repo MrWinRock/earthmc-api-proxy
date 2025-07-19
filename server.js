@@ -1,56 +1,114 @@
-const express = require("express");
-const cors = require("cors");
-const axios = require("axios");
+import { serve } from "bun";
 
-const app = express();
 const PORT = process.env.PORT || 3000;
-
-app.use(cors());
-app.use(express.json());
-
 const EARTHMC_API_BASE = "https://api.earthmc.net/v3/aurora";
 
 // Generic proxy handler for POST requests to EarthMC
-const forwardPostRequest = (endpoint) => async (req, res) => {
+const forwardPostRequest = (endpoint) => async (req) => {
     try {
-        const response = await axios.post(`${EARTHMC_API_BASE}/${endpoint}`, req.body, {
+        const body = await req.json();
+        const response = await fetch(`${EARTHMC_API_BASE}/${endpoint}`, {
+            method: "POST",
             headers: { "Content-Type": "application/json" },
-            timeout: 10000
+            body: JSON.stringify(body),
         });
-        res.status(response.status).json(response.data);
+
+        const data = await response.json();
+        return new Response(JSON.stringify(data), {
+            status: response.status,
+            headers: {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            },
+        });
     } catch (error) {
         console.error(`Error forwarding POST to /${endpoint}:`, {
             message: error.message,
-            data: error.response?.data,
-            status: error.response?.status,
         });
-        res.status(500).json({ error: `Failed to contact EarthMC API for /${endpoint}` });
+        return new Response(
+            JSON.stringify({ error: `Failed to contact EarthMC API for /${endpoint}` }),
+            {
+                status: 500,
+                headers: {
+                    "Content-Type": "application/json",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            }
+        );
     }
 };
 
-// Routes
-app.post("/api/players", forwardPostRequest("players"));
-app.post("/api/towns", forwardPostRequest("towns"));
-app.post("/api/nations", forwardPostRequest("nations"));
-app.post("/api/nearby", forwardPostRequest("nearby"));
-app.post("/api/quarters", forwardPostRequest("quarters"));
-app.post("/api/location", forwardPostRequest("location"));
+const server = serve({
+    port: PORT,
+    async fetch(req) {
+        const url = new URL(req.url);
+        const pathname = url.pathname;
 
-app.get("/api", async (req, res) => {
-    try {
-        const response = await axios.get(`${EARTHMC_API_BASE}/`);
-        res.status(response.status).json(response.data);
-    } catch (error) {
-        res.status(500).json({ error: "Failed to fetch towns data" });
-    }
+        // CORS preflight
+        if (req.method === "OPTIONS") {
+            return new Response(null, {
+                status: 200,
+                headers: {
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type",
+                },
+            });
+        }
+
+        // Routes
+        if (req.method === "POST") {
+            if (pathname === "/api/players") return forwardPostRequest("players")(req);
+            if (pathname === "/api/towns") return forwardPostRequest("towns")(req);
+            if (pathname === "/api/nations") return forwardPostRequest("nations")(req);
+            if (pathname === "/api/nearby") return forwardPostRequest("nearby")(req);
+            if (pathname === "/api/quarters") return forwardPostRequest("quarters")(req);
+            if (pathname === "/api/location") return forwardPostRequest("location")(req);
+        }
+
+        if (req.method === "GET") {
+            if (pathname === "/api") {
+                try {
+                    const response = await fetch(`${EARTHMC_API_BASE}/`);
+                    const data = await response.json();
+                    return new Response(JSON.stringify(data), {
+                        status: response.status,
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Access-Control-Allow-Origin": "*",
+                        },
+                    });
+                } catch (error) {
+                    return new Response(
+                        JSON.stringify({ error: "Failed to fetch API data" }),
+                        {
+                            status: 500,
+                            headers: {
+                                "Content-Type": "application/json",
+                                "Access-Control-Allow-Origin": "*",
+                            },
+                        }
+                    );
+                }
+            }
+
+            if (pathname === "/health") {
+                return new Response(
+                    JSON.stringify({ status: "ok", message: "Proxy running" }),
+                    {
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Access-Control-Allow-Origin": "*",
+                        },
+                    }
+                );
+            }
+        }
+
+        return new Response("Not Found", { status: 404 });
+    },
 });
 
-app.get("/health", (req, res) => {
-    res.json({ status: "ok", message: "Proxy running" });
-});
-
-
-// Localhost route for testing
-app.listen(PORT, () => {
-    console.log(`Proxy server running on port ${PORT}`);
-});
+console.log(`Bun proxy server running on port ${PORT}`);
